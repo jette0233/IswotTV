@@ -1,0 +1,52 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.crt
+*.pem
+*.p12
+*.pfx
+
+# Sensitive captures, database dumps, and deployment archives
+*.har
+*.sql
+!backend/init.sql
+*.zip
+*.7z
+*.tar
+*.tar.gz
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node and build output
+node_modules/
+dist/
+coverage/
+
+# IDE and local tooling
+.idea/
+.vscode/
+.workbuddy/
+*.log
+
+# Personal infrastructure notes
+docs/claude-remote-tunnel.md
+
+# Local research/debug artifacts
+backend/captcha_debug/
+scripts/*.jpg
+scripts/*.jpeg
+scripts/*.png
+scripts/*.webp
+/*.jpg
+/*.jpeg
+/*.png
+/*.webp

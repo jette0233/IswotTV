@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理后台 - 课堂签到助手</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0d1117;color:#c9d1d9;min-height:100vh;display:flex;align-items:center;justify-content:center}
+a{color:#58a6ff;text-decoration:none}
+a:hover{text-decoration:underline}
+input,button,select{font-family:inherit;font-size:14px;outline:none}
+
+/* Login */
+.login-box{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:40px;width:360px}
+.login-box h1{font-size:20px;font-weight:600;margin-bottom:24px;color:#f0f6fc;text-align:center}
+.login-box label{display:block;font-size:13px;margin-bottom:6px;color:#8b949e}
+.login-box input{width:100%;padding:10px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;margin-bottom:16px}
+.login-box input:focus{border-color:#58a6ff}
+.login-box button{width:100%;padding:10px;background:#238636;border:none;border-radius:6px;color:#fff;font-weight:600;cursor:pointer}
+.login-box button:hover{background:#2ea043}
+.login-box .error{color:#f85149;font-size:13px;margin-top:8px;text-align:center}
+
+/* Layout */
+.app{display:none;width:100%;max-width:1200px;margin:20px;min-height:calc(100vh-40px)}
+.header{display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #30363d;margin-bottom:20px}
+.header h1{font-size:18px;font-weight:600;color:#f0f6fc}
+.header .user{font-size:13px;color:#8b949e}
+.header .logout{cursor:pointer;color:#f85149;font-size:13px}
+.header .logout:hover{text-decoration:underline}
+
+/* Nav */
+.nav{display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid #21262d;padding-bottom:0}
+.nav a{padding:8px 16px;font-size:14px;color:#8b949e;border-bottom:2px solid transparent;cursor:pointer}
+.nav a:hover{color:#c9d1d9;text-decoration:none}
+.nav a.active{color:#f0f6fc;border-bottom-color:#f0f6fc}
+
+/* Content */
+.panel{display:none}
+.panel.active{display:block}
+
+/* Stats */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:24px}
+.stat-card{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:16px}
+.stat-card .num{font-size:28px;font-weight:600;color:#f0f6fc}
+.stat-card .label{font-size:12px;color:#8b949e;margin-top:4px}
+
+/* Table */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #21262d}
+th{color:#8b949e;font-weight:500;white-space:nowrap}
+td{color:#c9d1d9}
+tr:hover td{background:#161b22}
+.status-success{color:#3fb950}
+.status-fail{color:#f85149}
+.status-skipped{color:#d29922}
+
+/* Controls */
+.toolbar{display:flex;gap:8px;margin-bottom:12px;align-items:center}
+.toolbar input,.toolbar select{padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9}
+.toolbar input:focus,.toolbar select:focus{border-color:#58a6ff}
+.toolbar button{padding:6px 12px;background:#21262d;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;cursor:pointer}
+.toolbar button:hover{background:#30363d}
+.toolbar .btn-primary{background:#238636;border-color:#238636;color:#fff}
+.toolbar .btn-primary:hover{background:#2ea043}
+
+.pagination{display:flex;gap:8px;margin-top:12px;align-items:center;font-size:13px;color:#8b949e}
+.pagination button{padding:4px 10px;background:#21262d;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;cursor:pointer}
+.pagination button:disabled{opacity:0.4;cursor:default}
+
+.tag{display:inline-block;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:500}
+.tag-red{background:#f8514920;color:#f85149;border:1px solid #f8514940}
+.tag-green{background:#3fb95020;color:#3fb950;border:1px solid #3fb95040}
+.tag-gray{background:#8b949e20;color:#8b949e;border:1px solid #8b949e40}
+
+.toast{position:fixed;top:20px;right:20px;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:12px 16px;font-size:13px;z-index:999;display:none;max-width:400px}
+.toast.show{display:block}
+
+/* Switch */
+.switch{position:relative;display:inline-block;width:36px;height:20px;cursor:pointer}
+.switch input{opacity:0;width:0;height:0}
+.switch .slider{position:absolute;top:0;left:0;right:0;bottom:0;background:#30363d;border-radius:10px;transition:.2s}
+.switch .slider:before{position:absolute;content:'';height:14px;width:14px;left:3px;bottom:3px;background:#8b949e;border-radius:50%;transition:.2s}
+.switch input:checked+.slider{background:#238636}
+.switch input:checked+.slider:before{background:#fff;transform:translateX(16px)}
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<div class="login-box" id="loginBox">
+  <h1>管理后台</h1>
+  <label>账号</label>
+  <input type="text" id="loginUser" placeholder="admin">
+  <label>密码</label>
+  <input type="password" id="loginPass" placeholder="admin password" onkeydown="if(event.key==='Enter')doLogin()">
+  <button onclick="doLogin()">登录</button>
+  <div class="error" id="loginError"></div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- App -->
+<div class="app" id="app">
+  <div class="header">
+    <h1>管理后台</h1>
+    <div>
+      <span class="user" id="headerInfo">已登录</span>
+      <span class="logout" onclick="doLogout()" style="margin-left:12px">退出登录</span>
+    </div>
+  </div>
+
+  <div class="nav">
+    <a class="active" onclick="switchTab('dashboard')">概览</a>
+    <a onclick="switchTab('courses')">课程</a>
+    <a onclick="switchTab('users')">用户</a>
+    <a onclick="switchTab('logs')">签到日志</a>
+  </div>
+
+  <!-- Dashboard -->
+  <div class="panel active" id="panelDashboard">
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <!-- Courses -->
+  <div class="panel" id="panelCourses">
+    <div class="toolbar">
+      <input type="text" id="courseKeyword" placeholder="搜索课程名" onkeydown="if(event.key==='Enter')loadCourses()">
+      <select id="courseCaptchaFilter">
+        <option value="">全部</option>
+        <option value="1">有验证码</option>
+        <option value="0">无验证码</option>
+      </select>
+      <button class="btn-primary" onclick="loadCourses()">搜索</button>
+    </div>
+    <table>
+      <thead><tr><th>ID</th><th>课程名称</th><th>验证码</th><th>活跃MQ</th><th>成员数</th><th>创建者</th><th>操作</th></tr></thead>
+      <tbody id="courseList"></tbody>
+    </table>
+    <div class="pagination" id="coursePagination"></div>
+  </div>
+
+  <!-- Users -->
+  <div class="panel" id="panelUsers">
+    <div class="toolbar">
+      <input type="text" id="userKeyword" placeholder="搜索昵称/手机号" onkeydown="if(event.key==='Enter')loadUsers()">
+      <button class="btn-primary" onclick="loadUsers()">搜索</button>
+    </div>
+    <table>
+      <thead><tr><th>ID</th><th>昵称</th><th>手机号</th><th>Cookie</th><th>注册时间</th></tr></thead>
+      <tbody id="userList"></tbody>
+    </table>
+    <div class="pagination" id="userPagination"></div>
+  </div>
+
+  <!-- Logs -->
+  <div class="panel" id="panelLogs">
+    <table>
+      <thead><tr><th>ID</th><th>用户</th><th>课程ID</th><th>状态</th><th>消息</th><th>时间</th></tr></thead>
+      <tbody id="logList"></tbody>
+    </table>
+    <div class="pagination" id="logPagination"></div>
+  </div>
+</div>
+
+<script>
+let token = sessionStorage.getItem('admin_token')
+let currentTab = 'dashboard'
+
+function showToast(msg, ok) {
+  var t = document.getElementById('toast')
+  t.textContent = msg
+  t.style.borderColor = ok ? '#238636' : '#f85149'
+  t.classList.add('show')
+  setTimeout(function(){t.classList.remove('show')},3000)
+}
+
+function api(path, data) {
+  var opts = {headers:{'Authorization':'Bearer '+token}}
+  if (!data) {
+    opts.method = 'GET'
+  } else {
+    opts.method = 'POST'
+    opts.headers['Content-Type'] = 'application/json'
+    opts.body = JSON.stringify(data)
+  }
+  return fetch('/txjadmin'+path, opts).then(function(r){return r.json()})
+}
+
+function doLogin() {
+  var user = document.getElementById('loginUser').value.trim()
+  var pass = document.getElementById('loginPass').value.trim()
+  if (!user || !pass) {document.getElementById('loginError').textContent='请输入账号和密码';return}
+  fetch('/txjadmin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user,password:pass})})
+  .then(function(r){return r.json()})
+  .then(function(d){
+    if (d.code===200) {
+      token = d.data.token
+      sessionStorage.setItem('admin_token', token)
+      document.getElementById('loginBox').style.display='none'
+      document.getElementById('app').style.display='block'
+      loadDashboard()
+    } else {
+      document.getElementById('loginError').textContent=d.msg
+    }
+  })
+}
+
+function doLogout() {
+  sessionStorage.removeItem('admin_token')
+  token = null
+  document.getElementById('app').style.display='none'
+  document.getElementById('loginBox').style.display='block'
+  document.getElementById('loginPass').value=''
+}
+
+function switchTab(tab) {
+  currentTab = tab
+  document.querySelectorAll('.nav a').forEach(function(a){a.classList.remove('active')})
+  document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active')})
+  var links = document.querySelectorAll('.nav a')
+  var panels = {dashboard:0,courses:1,users:2,logs:3}
+  links[panels[tab]].classList.add('active')
+  document.getElementById('panel'+tab.charAt(0).toUpperCase()+tab.slice(1)).classList.add('active')
+  if (tab==='dashboard') loadDashboard()
+  else if (tab==='courses') loadCourses()
+  else if (tab==='users') loadUsers()
+  else if (tab==='logs') loadLogs()
+}
+
+// Dashboard
+function loadDashboard() {
+  api('/dashboard').then(function(d){
+    if (d.code!==200) return
+    var s = d.data
+    document.getElementById('stats').innerHTML =
+      '<div class="stat-card"><div class="num">'+s.total_users+'</div><div class="label">用户数</div></div>'+
+      '<div class="stat-card"><div class="num">'+s.total_courses+'</div><div class="label">课程数</div></div>'+
+      '<div class="stat-card"><div class="num">'+s.active_captcha_courses+'</div><div class="label">有验证码</div></div>'+
+      '<div class="stat-card"><div class="num">'+s.total_sign_logs+'</div><div class="label">总签到记录</div></div>'+
+      '<div class="stat-card"><div class="num">'+s.today_sign_logs+'</div><div class="label">今日签到</div></div>'
+  })
+}
+
+// Courses
+var coursePage = 1
+function loadCourses() {
+  var kw = document.getElementById('courseKeyword').value
+  var cf = document.getElementById('courseCaptchaFilter').value
+  api('/courses?page='+coursePage+'&per_page=20&keyword='+encodeURIComponent(kw)+'&has_captcha='+cf).then(function(d){
+    if (d.code!==200) return
+    var html = ''
+    d.data.courses.forEach(function(c){
+      var captchaHtml = '<label class="switch"><input type="checkbox" '+(c.has_captcha?'checked':'')+' onchange="toggleCaptcha('+c.id+',this.checked)"><span class="slider"></span></label>'
+      html += '<tr><td>'+c.id+'</td><td>'+c.course_name+'</td><td>'+captchaHtml+'</td><td>'+(c.has_active_mq?'是':'否')+'</td><td>'+c.member_count+'</td><td>'+c.creator_id+'</td><td>'+c.course_id+'</td></tr>'
+    })
+    document.getElementById('courseList').innerHTML = html
+    var total = d.data.total
+    var pc = Math.ceil(total/20)
+    var ph = '<button onclick="coursePage='+Math.max(1,coursePage-1)+';loadCourses()" '+(coursePage<=1?'disabled':'')+'>上一页</button>'
+    ph += '<span>第'+coursePage+'/'+pc+'页 共'+total+'条</span>'
+    ph += '<button onclick="coursePage='+Math.min(pc,coursePage+1)+';loadCourses()" '+(coursePage>=pc?'disabled':'')+'>下一页</button>'
+    document.getElementById('coursePagination').innerHTML = ph
+  })
+}
+
+function toggleCaptcha(cid, val) {
+  api('/course/toggle-captcha',{course_id:cid,has_captcha:val}).then(function(d){
+    if (d.code===200) showToast(val?'已开启验证码拦截':'已关闭验证码拦截', true)
+    else showToast('操作失败: '+d.msg)
+  })
+}
+
+// Users
+var userPage = 1
+function loadUsers() {
+  var kw = document.getElementById('userKeyword').value
+  api('/users?page='+userPage+'&per_page=20&keyword='+encodeURIComponent(kw)).then(function(d){
+    if (d.code!==200) return
+    var html = ''
+    d.data.users.forEach(function(u){
+      var cookieStatus = u.has_cookie ? '<span class="tag tag-green">有</span>' : '<span class="tag tag-gray">无</span>'
+      if (u.cookie_expire_at) cookieStatus = '<span class="tag tag-green">有效</span>'
+      html += '<tr><td>'+u.id+'</td><td>'+u.nickname+'</td><td>'+u.phone+'</td><td>'+cookieStatus+'</td><td>'+(u.created_at||'')+'</td></tr>'
+    })
+    document.getElementById('userList').innerHTML = html
+    var total = d.data.total
+    var pc = Math.ceil(total/20)
+    var ph = '<button onclick="userPage='+Math.max(1,userPage-1)+';loadUsers()" '+(userPage<=1?'disabled':'')+'>上一页</button>'
+    ph += '<span>第'+userPage+'/'+pc+'页 共'+total+'条</span>'
+    ph += '<button onclick="userPage='+Math.min(pc,userPage+1)+';loadUsers()" '+(userPage>=pc?'disabled':'')+'>下一页</button>'
+    document.getElementById('userPagination').innerHTML = ph
+  })
+}
+
+// Logs
+var logPage = 1
+function loadLogs() {
+  api('/sign-logs?page='+logPage+'&per_page=20').then(function(d){
+    if (d.code!==200) return
+    var html = ''
+    d.data.logs.forEach(function(l){
+      var sc = l.status==='success'?'status-success':l.status==='fail'?'status-fail':'status-skipped'
+      html += '<tr><td>'+l.id+'</td><td>'+l.user_id+'</td><td>'+l.course_id+'</td><td class="'+sc+'">'+l.status+'</td><td>'+(l.message||'')+'</td><td>'+(l.created_at||'')+'</td></tr>'
+    })
+    document.getElementById('logList').innerHTML = html
+    var total = d.data.total
+    var pc = Math.ceil(total/20)
+    var ph = '<button onclick="logPage='+Math.max(1,logPage-1)+';loadLogs()" '+(logPage<=1?'disabled':'')+'>上一页</button>'
+    ph += '<span>第'+logPage+'/'+pc+'页 共'+total+'条</span>'
+    ph += '<button onclick="logPage='+Math.min(pc,logPage+1)+';loadLogs()" '+(logPage>=pc?'disabled':'')+'>下一页</button>'
+    document.getElementById('logPagination').innerHTML = ph
+  })
+}
+
+// Auto-login check
+if (token) {
+  api('/dashboard').then(function(d){
+    if (d.code===200) {
+      document.getElementById('loginBox').style.display='none'
+      document.getElementById('app').style.display='block'
+      loadDashboard()
+    } else {
+      sessionStorage.removeItem('admin_token')
+    }
+  })
+}
+</script>
+</body>
+</html>
