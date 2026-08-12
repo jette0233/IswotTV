@@ -33,12 +33,10 @@ def _verify_admin_token(token):
 
 
 def _get_token():
-    """从请求中提取 token（Authorization header 或 query param）"""
+    """从 Authorization header 中提取 token。"""
     auth = request.headers.get("Authorization", "")
     m = re.match(r"Bearer\s+(.+)", auth)
-    if m:
-        return m.group(1)
-    return request.args.get("token", "")
+    return m.group(1) if m else ""
 
 
 def require_admin(f):
@@ -64,11 +62,34 @@ def admin_login():
     if not username or not password:
         return jsonify({"code": 400, "msg": "请输入账号和密码"}), 400
 
+    from app.services.mq_manager import mq_manager
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+    attempt_key = f"admin:login-attempts:{client_ip}"
+    if mq_manager.redis:
+        try:
+            if int(mq_manager.redis.get(attempt_key) or 0) >= 5:
+                return jsonify({"code": 429, "msg": "登录失败次数过多，请15分钟后重试"}), 429
+        except Exception:
+            pass
+
     # 验证账密
     expected_user = current_app.config["ADMIN_USERNAME"]
     expected_pwd = current_app.config["ADMIN_PASSWORD"]
     if username != expected_user or password != expected_pwd:
+        if mq_manager.redis:
+            try:
+                attempts = mq_manager.redis.incr(attempt_key)
+                if attempts == 1:
+                    mq_manager.redis.expire(attempt_key, 900)
+            except Exception:
+                pass
         return jsonify({"code": 401, "msg": "管理员账号或密码错误"}), 401
+
+    if mq_manager.redis:
+        try:
+            mq_manager.redis.delete(attempt_key)
+        except Exception:
+            pass
 
     token = _make_admin_token()
     return jsonify({
@@ -253,6 +274,30 @@ def toggle_captcha():
 
 # ─── 课程编辑（全字段） ───
 
+@admin_bp.route("/course/create", methods=["POST"])
+@require_admin
+def admin_create_course():
+    data = request.get_json() or {}
+    external_id = str(data.get("course_id", "")).strip()
+    if not external_id:
+        return jsonify({"code": 400, "msg": "缺少course_id"}), 400
+    if Course.query.filter_by(course_id=external_id).first():
+        return jsonify({"code": 409, "msg": "课程已存在"}), 409
+    admin_user = User.query.filter_by(is_admin=True).order_by(User.id.asc()).first()
+    if not admin_user:
+        return jsonify({"code": 409, "msg": "请先创建并绑定前台admin代理账户"}), 409
+    course = Course(
+        course_id=external_id, course_name=data.get("course_name") or external_id,
+        teacher_name=data.get("teacher_name"), address=data.get("address"), weekdays=data.get("weekdays") or "1,2,3,4,5",
+        default_latitude=data.get("default_latitude"), default_longitude=data.get("default_longitude"),
+        creator_id=admin_user.id, is_active=True, has_captcha=bool(data.get("has_captcha", False)),
+    )
+    db.session.add(course)
+    db.session.flush()
+    db.session.add(CourseMember(user_id=admin_user.id, course_id=course.id))
+    db.session.commit()
+    return jsonify({"code": 200, "msg": "课程创建成功", "data": {"id": course.id}})
+
 @admin_bp.route("/course/update", methods=["POST"])
 @require_admin
 def admin_update_course():
@@ -382,6 +427,10 @@ def admin_delete_user():
     user = User.query.get(uid)
     if not user:
         return jsonify({"code": 404, "msg": "用户不存在"}), 404
+
+    owned_courses = Course.query.filter_by(creator_id=user.id).count()
+    if owned_courses:
+        return jsonify({"code": 409, "msg": f"该用户仍拥有{owned_courses}门课程，请先转让或删除课程"}), 409
 
     CourseMember.query.filter_by(user_id=user.id).delete()
     SignLog.query.filter_by(user_id=user.id).delete()

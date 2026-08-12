@@ -68,6 +68,7 @@ const route = useRoute()
 const courseId = computed(() => route.params.courseId)
 const uid = computed(() => localStorage.getItem('uid'))
 const courseName = ref('')
+const sourceCourseId = ref('')
 
 const isProducer = ref(false)
 const cameraActive = ref(false)
@@ -121,19 +122,23 @@ const captureAndDecode = async () => {
       const url = code.data
       addLog('完整URL: ' + url)
       const parts = url.split(/[?&]/)
-      let enc = null, activeId = null
+      let enc = null, activeId = null, qrCourseId = null
       for (const p of parts) {
         const [k, v] = p.split('=')
         if (k === 'enc') enc = v
         else if (k === 'id') activeId = v
+        else if (['courseId', 'courseid', 'course_id'].includes(k)) qrCourseId = v
       }
       if (enc && activeId) {
         lastEnc.value = enc.substring(0,20) + '...'
         addLog('enc: ' + enc.substring(0,16) + '  activeId: ' + activeId)
-        if (isProducer.value) {
+        if (!qrCourseId) {
+          addLog('二维码缺少courseId，拒绝推送')
+        } else if (isProducer.value) {
           await producerApi.pushEnc({
             course_id: courseId.value,
             user_id: uid.value,
+            source_course_id: qrCourseId,
             enc,
             active_id: activeId,
             latitude: gpsLat.value,
@@ -195,7 +200,10 @@ const stopCamera = () => {
 
 const forceClaim = async () => { await claimProducer() }
 
-onMounted(() => { courseName.value = localStorage.getItem('currentCourseName') || '' })
+onMounted(() => {
+  courseName.value = localStorage.getItem('currentCourseName') || ''
+  sourceCourseId.value = localStorage.getItem('currentSourceCourseId') || ''
+})
 onUnmounted(() => { stopCamera() })
 </script>
 

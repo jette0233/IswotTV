@@ -1,0 +1,38 @@
+groups:
+  - name: chaoxing
+    rules:
+      - alert: ApiUnavailable
+        expr: up{job="api-v2"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "FastAPI instance unavailable" }
+      - alert: MySQLUnavailable
+        expr: min(dependency_up{dependency="mysql"}) == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "MySQL readiness check is failing" }
+      - alert: RedisUnavailable
+        expr: min(dependency_up{dependency="redis"}) == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "Redis readiness check is failing" }
+      - alert: WorkerUnavailable
+        expr: sum(up{job="workers"}) < 1
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "No signing worker is available" }
+      - alert: SigningFailureRateHigh
+        expr: sum(rate(sign_results_total{status!="success"}[5m])) / clamp_min(sum(rate(sign_results_total[5m])), 1) > 0.30
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Signing failure rate exceeds 30 percent" }
+      - alert: SigningQueueBacklog
+        expr: sign_queue_pending > 100 or sign_queue_depth > 100
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "More than 100 signing tasks are pending" }
+      - alert: SigningTaskWaitingTooLong
+        expr: sign_oldest_pending_seconds > 30
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "The oldest signing task has waited more than 30 seconds" }

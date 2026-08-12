@@ -3,18 +3,19 @@ import json
 import os
 import base64
 import requests as http_requests
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from app.models.models import db, User, Course, CourseMember, SignLog
 from app.services.mq_manager import mq_manager
 from app.services.geo_convert import wgs84_to_gcj02
 from datetime import datetime, timezone
+from app.services.security import CredentialCipher, require_user
 
 consumer_bp = Blueprint("consumer", __name__)
 
 
 def get_user_cookie(user):
     if user.cookie_manual:
-        return user.cookie_manual
+        return CredentialCipher.decrypt(user.cookie_manual)
     return None
 
 
@@ -64,13 +65,14 @@ def _build_sign_params(active_id, enc, address, pk_uid, pk_name, pk_fid, device_
 
 
 @consumer_bp.route("/check-sign", methods=["GET"])
+@require_user
 def check_sign():
     """
     消费者轮询接口：检查指定课程是否有可签到的活动
     如果有active MQ + 最新enc，返回enc供客户端调用签到
     """
     course_id = request.args.get("course_id")
-    uid = request.args.get("uid")
+    uid = g.current_user.id
 
     if not course_id or not uid:
         return jsonify({"code": 400, "msg": "参数不完整"}), 400
@@ -101,13 +103,14 @@ def check_sign():
 
 
 @consumer_bp.route("/do-sign", methods=["POST"])
+@require_user
 def do_sign():
     """
     服务端代签：由服务器代替用户调用学习通签到API
     用户只需提供cookie，由服务器统一调用stuSignajax
     """
     data = request.get_json(force=True, silent=True) or {}
-    uid = data.get("uid")
+    uid = g.current_user.id
     course_id = data.get("course_id")
     enc = data.get("enc")
 
@@ -128,6 +131,11 @@ def do_sign():
 
     active_id = latest["active_id"]
     course = Course.query.get(course_id)
+    member = CourseMember.query.filter_by(user_id=uid, course_id=course_id).first()
+    if not member or not course:
+        return jsonify({"code": 403, "msg": "你不是该课程成员"}), 403
+    if enc != latest["enc"]:
+        return jsonify({"code": 409, "msg": "enc已更新，请重试"}), 409
 
     # 提取 Cookie 中的 uid/name/fid/deviceCode
     pk_uid, pk_name, pk_fid, device_code = _extract_cookie_info(cookie, user)
@@ -186,8 +194,8 @@ def do_sign():
             print(f"[do_sign] errorLocation1，尝试降级方案1（top-level lat/lng）...")
             # 方案1: 去掉 location JSON，直接传 lat/lng 到顶层
             params.pop("location", None)
-            params["latitude"] = gcj_lat if gcj_lat != "-1" else "39.9042"
-            params["longitude"] = gcj_lng if gcj_lng != "-1" else "116.4074"
+            params["latitude"] = gcj_lat
+            params["longitude"] = gcj_lng
             resp2 = http_requests.get(sign_url, params=params, headers=headers, timeout=10)
             result_text = resp2.text.strip()
             http_code = resp2.status_code
@@ -198,8 +206,8 @@ def do_sign():
             print(f"[do_sign] errorLocation1 仍存在，尝试方案2（name+uid+ifTiJiao 二次请求）...")
             fallback_params = {
                 "name": pk_name, "address": course_addr, "activeId": active_id,
-                "uid": pk_uid, "clientip": "", "latitude": gcj_lat if gcj_lat != "-1" else "39.9042",
-                "longitude": gcj_lng if gcj_lng != "-1" else "116.4074",
+                "uid": pk_uid, "clientip": "", "latitude": gcj_lat,
+                "longitude": gcj_lng,
                 "fid": pk_fid, "appType": "15", "ifTiJiao": "1",
             }
             resp2 = http_requests.get(sign_url, params=fallback_params, headers=headers, timeout=10)
@@ -278,9 +286,10 @@ def do_sign():
 
 
 @consumer_bp.route("/sign-log", methods=["GET"])
+@require_user
 def sign_log():
     """查询签到历史"""
-    uid = request.args.get("uid")
+    uid = g.current_user.id
     course_id = request.args.get("course_id")
 
     if not uid:
@@ -307,12 +316,13 @@ def sign_log():
 
 
 @consumer_bp.route("/pending-courses", methods=["GET"])
+@require_user
 def pending_courses():
     """
     查询用户加入的所有课程中，哪些课程当前有活跃MQ
     消费者守护进程用这个接口判断需要监控哪些课程
     """
-    uid = request.args.get("uid")
+    uid = g.current_user.id
     if not uid:
         return jsonify({"code": 400, "msg": "缺少uid"}), 400
 

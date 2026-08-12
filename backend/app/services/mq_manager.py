@@ -19,6 +19,31 @@ from datetime import datetime, timezone
 from flask import current_app
 
 
+CLAIM_PRODUCER = """
+local raw = redis.call('get', KEYS[1])
+if not raw then
+  redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[4])
+  return {1, ARGV[3]}
+end
+local ok, current = pcall(cjson.decode, raw)
+if not ok or (tonumber(ARGV[2]) - tonumber(current['last_heartbeat'] or 0)) > tonumber(ARGV[5]) then
+  redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[4])
+  return {2, ARGV[3]}
+end
+return {0, tostring(current['uid'] or '0')}
+"""
+
+HEARTBEAT_PRODUCER = """
+local raw = redis.call('get', KEYS[1])
+if not raw then return 0 end
+local ok, current = pcall(cjson.decode, raw)
+if not ok or tostring(current['uid'] or '') ~= ARGV[1] then return 0 end
+current['last_heartbeat'] = tonumber(ARGV[2])
+redis.call('set', KEYS[1], cjson.encode(current), 'EX', ARGV[3])
+return 1
+"""
+
+
 class MQManager:
     def __init__(self, redis_client=None):
         self.redis = redis_client
@@ -33,66 +58,36 @@ class MQManager:
         """
         producer_key = f"mq:{course_id}:producer"
         now = time.time()
-
-        # 用Redis SET NX实现先到先得
-        if not self.redis.exists(producer_key):
-            self.redis.hset(producer_key, mapping={
-                "uid": str(user_id),
-                "claimed_at": now,
-                "last_heartbeat": now,
-            })
-            self.redis.expire(producer_key, 30)  # 30s整体过期保底
+        value = json.dumps({
+            "uid": str(user_id), "claimed_at": now, "last_heartbeat": now,
+        })
+        result, owner = self.redis.eval(
+            CLAIM_PRODUCER, 1, producer_key, value, now, str(user_id), 30,
+            current_app.config.get("PRODUCER_HEARTBEAT_TIMEOUT", 15),
+        )
+        if int(result) == 1:
             return True, "竞选成功"
-
-        # 检查当前生产者是否超时
-        producer_data = self.redis.hgetall(producer_key)
-        if not producer_data:
-            return False, "竞选失败，请重试"
-
-        last_hb = float(producer_data.get(b"last_heartbeat", producer_data.get("last_heartbeat", 0)))
-        timeout = current_app.config.get("PRODUCER_HEARTBEAT_TIMEOUT", 15)
-
-        if time.time() - last_hb > timeout:
-            # 超时，抢占
-            self.redis.hset(producer_key, mapping={
-                "uid": str(user_id),
-                "claimed_at": now,
-                "last_heartbeat": now,
-            })
-            self.redis.expire(producer_key, 30)
+        if int(result) == 2:
             return True, "抢占成功（上一生产者已超时）"
-
-        current_uid = producer_data.get(b"uid", producer_data.get("uid", b"0")).decode() if isinstance(
-            producer_data.get(b"uid", producer_data.get("uid", b"0")), bytes) else producer_data.get("uid", "0")
-        return False, f"当前生产者是用户{current_uid}"
+        return False, f"当前生产者是用户{owner}"
 
     def heartbeat(self, course_id, user_id):
         """生产者心跳"""
         producer_key = f"mq:{course_id}:producer"
-        producer_data = self.redis.hgetall(producer_key)
-        if not producer_data:
-            return False, "无活跃生产者"
-
-        current_uid = producer_data.get(b"uid", producer_data.get("uid", b"0"))
-        if isinstance(current_uid, bytes):
-            current_uid = current_uid.decode()
-        if str(current_uid) != str(user_id):
+        renewed = self.redis.eval(
+            HEARTBEAT_PRODUCER, 1, producer_key, str(user_id), time.time(), 30
+        )
+        if not renewed:
             return False, "你不是当前生产者"
-
-        self.redis.hset(producer_key, "last_heartbeat", time.time())
-        self.redis.expire(producer_key, 30)
         return True, "心跳成功"
 
     def get_current_producer(self, course_id):
         """查看当前生产者"""
         producer_key = f"mq:{course_id}:producer"
-        data = self.redis.hgetall(producer_key)
-        if not data:
+        raw = self.redis.get(producer_key)
+        if not raw:
             return None
-        uid = data.get(b"uid", data.get("uid", None))
-        if isinstance(uid, bytes):
-            uid = uid.decode()
-        return uid
+        return json.loads(raw).get("uid")
 
     # ─────────── 消息队列 ───────────
 

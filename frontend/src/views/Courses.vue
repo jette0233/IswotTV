@@ -189,7 +189,7 @@ const loadCourses = async () => {
 
 const loadCookieStatus = async () => {
   try {
-    const res = await authApi.cookieStatus(uid.value)
+    const res = await authApi.cookieStatus()
     if (res.data.code===200) {
       const d = res.data.data
       if (d.has_cookie) { cookieStatus.value = d; cookieExpired.value = d.is_expired; cookieRemaining.value = d.remaining_days }
@@ -225,13 +225,13 @@ const joinCourse = async () => {
 
 const uploadCookie = async () => {
   if (!manualCookie.value) return ElMessage.warning('请粘贴Cookie')
-  try { const res = await authApi.uploadCookie({ uid: uid.value, cookie: manualCookie.value }); if (res.data.code===200) { ElMessage.success('Cookie上传成功'); manualCookie.value=''; loadCookieStatus() } } catch(e) { ElMessage.error('上传失败') }
+  try { const res = await authApi.uploadCookie({ cookie: manualCookie.value }); if (res.data.data) { ElMessage.success('Cookie上传成功'); manualCookie.value=''; loadCookieStatus() } } catch(e) { ElMessage.error('上传失败') }
 }
 
 const bindAuto = async () => {
   if (!cxPhone.value || !cxPassword.value) return ElMessage.warning('请输入学习通账号和密码')
   try {
-    const res = await authApi.refreshCookie({ uid: uid.value, password: cxPassword.value, phone: cxPhone.value })
+    const res = await authApi.refreshCookie({ password: cxPassword.value, phone: cxPhone.value })
     if (res.data.code===200) { ElMessage.success('绑定成功'); cxPhone.value=''; cxPassword.value=''; loadCookieStatus() }
     else ElMessage.error(res.data.msg)
   } catch(e) { ElMessage.error('绑定失败') }
@@ -293,17 +293,12 @@ const deleteCourse = async (row) => {
 const leaveCourse = async (row) => {
   if (!confirm('确定退出课程「' + row.course_name + '」？')) return
   try {
-    const res = await courseApi.leave({ user_id: uid.value, course_id: row.id })
-    if (res.data.code === 200) {
-      ElMessage.success('已退出')
-      loadCourses()
-    } else {
-      ElMessage.warning(res.data.msg)
-    }
+    const res = await courseApi.leave({ course_id: row.id })
+    if (res.data.code === 200) { ElMessage.success('已退出'); loadCourses() }
   } catch(e) { ElMessage.error('退出失败: ' + (e.response?.data?.msg || e.message)) }
 }
 
-const goProducer = (row) => { localStorage.setItem('currentCourseName', row.course_name); router.push('/producer/' + row.id) }
+const goProducer = (row) => { localStorage.setItem('currentCourseName', row.course_name); localStorage.setItem('currentSourceCourseId', row.course_id); router.push('/producer/' + row.id) }
 const goConsumer = (row) => { localStorage.setItem('currentCourseName', row.course_name); router.push('/consumer') }
 const logout = () => { localStorage.clear(); router.push('/login') }
 

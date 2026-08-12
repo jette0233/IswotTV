@@ -8,18 +8,8 @@
 
     <div class="content">
       <div class="section-box">
-        <div style="font-weight:500;font-size:14px;margin-bottom:8px">当前签到活动</div>
-        <div v-if="loading" style="color:#999;font-size:13px;padding:10px 0">加载中...</div>
-        <div v-else-if="activeCourses.length===0" style="color:#999;font-size:13px;padding:10px 0">暂无活跃签到活动</div>
-        <div v-for="c in activeCourses" :key="c.id" class="item-row">
-          <div>
-            <div style="font-size:14px;font-weight:500">{{ c.course_name }}</div>
-            <div v-if="c.latest_enc" style="font-size:11px;color:#999;font-family:monospace">enc: {{ c.latest_enc.substring(0,16) }}...</div>
-          </div>
-          <div>
-            <span style="font-size:12px;color:#999">MQ剩余 {{ c.mq_remaining_seconds }}s</span>
-          </div>
-        </div>
+        <div style="font-weight:500;font-size:14px;margin-bottom:8px">任务执行状态</div>
+        <div style="color:#999;font-size:13px;padding:10px 0">签到由服务端 Worker 自动执行，本页面只展示结果。</div>
       </div>
 
       <!-- 日志面板 -->
@@ -40,12 +30,12 @@
         <div v-if="signLogs.length===0" style="color:#999;font-size:13px;padding:10px 0">暂无记录</div>
         <div v-for="log in signLogs" :key="log.id" class="item-row" style="font-size:13px">
           <div>
-            <div>{{ log.course_name }}</div>
-            <div style="font-size:11px;color:#999">{{ log.signed_at }}</div>
+            <div>活动 #{{ log.activity_id }}</div>
+            <div style="font-size:11px;color:#999">{{ new Date(log.created_at).toLocaleString() }}</div>
           </div>
           <div style="display:flex;align-items:center;gap:6px">
             <span :style="{color:log.status==='success'?'#67c23a':'#f56c6c',fontWeight:500}">
-              {{ log.status==='success' ? '成功' : '失败' }}
+              {{ statusLabel(log.status) }}
             </span>
             <span style="font-size:11px;color:#999;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ log.message }}</span>
           </div>
@@ -56,41 +46,23 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { consumer as consumerApi } from '../api/index.js'
 import { ElMessage } from 'element-plus'
 
-const uid = computed(() => localStorage.getItem('uid'))
-const loading = ref(false)
-const activeCourses = ref([])
 const signLogs = ref([])
 const runLog = ref([])
 let pollTimer = null
 
 const addLog = (msg) => { runLog.value.push('[' + new Date().toLocaleTimeString() + '] ' + msg); if (runLog.value.length>100) runLog.value.shift() }
+const statusLabel = (status) => ({pending:'等待中',processing:'执行中',retry:'重试中',success:'成功',manual_required:'需人工处理',expired:'已过期',dead:'失败'})[status] || status
 
 const loadLogs = async () => {
-  try { const res = await consumerApi.signLog(uid.value, null); if (res.data.code===200) signLogs.value = res.data.data || [] } catch(e) {}
+  try { const res = await consumerApi.tasks(); if (res.data.data) signLogs.value = res.data.data || [] } catch(e) {}
 }
 
 const autoSign = async () => {
-  try {
-    const res = await consumerApi.pendingCourses(uid.value)
-    if (res.data.code!==200) return
-    activeCourses.value = res.data.data
-    if (res.data.data.length === 0) return
-
-    for (const c of res.data.data) {
-      if (!c.latest_enc) continue
-      addLog('检测到enc: ' + c.latest_enc.substring(0,16) + '... 课程: ' + c.course_name)
-      addLog('发起签到请求...')
-      const sr = await consumerApi.doSign({ uid: uid.value, course_id: c.id, enc: c.latest_enc })
-      addLog('响应: ' + sr.data.msg + (sr.data.data ? ' | raw: ' + (sr.data.data.raw_response || '') : ''))
-      loadLogs()
-    }
-  } catch(e) {
-    addLog('请求异常: ' + e.message)
-  }
+  await loadLogs()
 }
 
 onMounted(() => {

@@ -1,5 +1,6 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from app.models.models import db, Course, CourseMember, User
+from app.services.security import require_user
 
 course_bp = Blueprint("course", __name__)
 
@@ -30,9 +31,10 @@ def _can_write_course(uid, course):
 # ─── create: 任何用户都可以创建 ───
 
 @course_bp.route("/create", methods=["POST"])
+@require_user
 def create_course():
     data = request.get_json()
-    creator_id = data.get("creator_id")
+    creator_id = g.current_user.id
     course_id = data.get("course_id", "").strip()
     course_name = data.get("course_name", course_id)
     address = data.get("address", "").strip()
@@ -71,10 +73,11 @@ def create_course():
 # ─── join: 任何已登录用户都可以加入 ───
 
 @course_bp.route("/join", methods=["POST"])
+@require_user
 def join_course():
     """加入一个课程"""
     data = request.get_json()
-    user_id = data.get("user_id")
+    user_id = g.current_user.id
     course_id = data.get("course_id")  # 可以是mysql id或学习通courseId
 
     if not user_id or not course_id:
@@ -100,10 +103,11 @@ def join_course():
 # ─── leave: 退出课程 ───
 
 @course_bp.route("/leave", methods=["POST"])
+@require_user
 def leave_course():
     """退出课程（删除自己的成员记录）"""
     data = request.get_json()
-    user_id = data.get("user_id")
+    user_id = g.current_user.id
     course_id = data.get("course_id")
 
     if not user_id or not course_id:
@@ -113,6 +117,10 @@ def leave_course():
     if not member:
         return jsonify({"code": 404, "msg": "你未加入该课程"}), 404
 
+    course = Course.query.get(course_id)
+    if course and course.creator_id == user_id:
+        return jsonify({"code": 400, "msg": "课程创建者不能直接退出，请先转让或删除课程"}), 400
+
     db.session.delete(member)
     db.session.commit()
     return jsonify({"code": 200, "msg": "已退出课程"})
@@ -121,8 +129,9 @@ def leave_course():
 # ─── list: 创建者/成员/admin 可见 ───
 
 @course_bp.route("/list", methods=["GET"])
+@require_user
 def list_courses():
-    uid = request.args.get("uid")
+    uid = g.current_user.id
     weekday = request.args.get("weekday")
     if not uid:
         return jsonify({"code": 400, "msg": "缺少uid"}), 400
@@ -185,10 +194,11 @@ def list_courses():
 # ─── detail: 创建者/成员/admin 可见 ───
 
 @course_bp.route("/detail", methods=["GET"])
+@require_user
 def course_detail():
     """课程详情（含成员列表）"""
     course_id = request.args.get("course_id")
-    uid = request.args.get("uid")
+    uid = g.current_user.id
 
     if not uid:
         return jsonify({"code": 400, "msg": "缺少uid"}), 400
@@ -227,11 +237,12 @@ def course_detail():
 # ─── update: 仅创建者/admin ───
 
 @course_bp.route("/update", methods=["POST"])
+@require_user
 def update_course():
     """修改课程信息"""
     data = request.get_json()
     course_id = data.get("course_id")
-    uid = data.get("uid")
+    uid = g.current_user.id
 
     if not course_id or not uid:
         return jsonify({"code": 400, "msg": "缺少course_id或uid"}), 400
@@ -258,11 +269,12 @@ def update_course():
 # ─── delete: 仅创建者/admin ───
 
 @course_bp.route("/delete", methods=["POST"])
+@require_user
 def delete_course():
     """删除课程"""
     data = request.get_json()
     course_id = data.get("course_id")
-    uid = data.get("uid")
+    uid = g.current_user.id
 
     if not course_id or not uid:
         return jsonify({"code": 400, "msg": "缺少course_id或uid"}), 400
@@ -274,6 +286,8 @@ def delete_course():
     if not _can_write_course(uid, course):
         return jsonify({"code": 403, "msg": "无权删除该课程"}), 403
 
+    from app.models.models import SignLog
+    SignLog.query.filter_by(course_id=course.id).delete()
     CourseMember.query.filter_by(course_id=course.id).delete()
     db.session.delete(course)
     db.session.commit()

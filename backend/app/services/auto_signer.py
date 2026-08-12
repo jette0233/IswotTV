@@ -19,6 +19,7 @@ from flask import current_app
 from app.models.models import db, User, Course, SignLog
 from app.services.mq_manager import mq_manager
 from app.services.geo_convert import wgs84_to_gcj02
+from app.services.security import CredentialCipher
 
 
 class AutoSignerService:
@@ -124,7 +125,7 @@ class AutoSignerService:
 
             # 直接调签到（不做滑块验证重试）
             result_text, status, message = self._do_sign(
-                cookie=user.cookie_manual,
+                cookie=CredentialCipher.decrypt(user.cookie_manual),
                 enc=enc,
                 active_id=active_id,
                 latitude=lat or "-1",

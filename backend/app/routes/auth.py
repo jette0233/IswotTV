@@ -1,22 +1,20 @@
 import re
 import json
-import hashlib
 import time
 from datetime import datetime, timedelta
 import requests as http_requests
 import jwt as pyjwt
 from flask import Blueprint, request, jsonify, current_app
 from app.models.models import db, User
+from app.services.security import CredentialCipher, hash_password, make_access_token, require_user, verify_password
+from flask import g
 
 auth_bp = Blueprint("auth", __name__)
 
 
 def make_token(user_id):
-    payload = {
-        "uid": user_id,
-        "exp": int(time.time()) + 86400 * 7,  # 7天
-    }
-    return pyjwt.encode(payload, current_app.config["SECRET_KEY"], algorithm="HS256")
+    user = User.query.get(user_id)
+    return make_access_token(user, expires_seconds=86400 * 7)
 
 
 @auth_bp.route("/register", methods=["POST"])
@@ -32,7 +30,9 @@ def register():
     if User.query.filter_by(phone=phone).first():
         return jsonify({"code": 409, "msg": "该手机号已注册"}), 409
 
-    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    if len(password) < 8:
+        return jsonify({"code": 400, "msg": "密码至少8位"}), 400
+    password_hash = hash_password(password)
     user = User(phone=phone, nickname=nickname, password_hash=password_hash)
     db.session.add(user)
     db.session.commit()
@@ -47,11 +47,14 @@ def login():
     phone = data.get("phone", "").strip()
     password = data.get("password", "")
 
-    password_hash = hashlib.sha256(password.encode()).hexdigest()
-    user = User.query.filter_by(phone=phone, password_hash=password_hash).first()
+    user = User.query.filter_by(phone=phone).first()
+    valid, needs_upgrade = verify_password(password, user.password_hash if user else None)
 
-    if not user:
+    if not user or not valid:
         return jsonify({"code": 401, "msg": "手机号或密码错误"}), 401
+    if needs_upgrade:
+        user.password_hash = hash_password(password)
+        db.session.commit()
 
     token = make_token(user.id)
     cookie_status = "valid"
@@ -76,10 +79,11 @@ def login():
 
 
 @auth_bp.route("/cookie/upload", methods=["POST"])
+@require_user
 def upload_cookie():
     """方案2：用户手动抓取Cookie后上传"""
     data = request.get_json()
-    uid = data.get("uid")
+    uid = g.current_user.id
     cookie_str = data.get("cookie", "").strip()
 
     if not uid or not cookie_str:
@@ -95,7 +99,11 @@ def upload_cookie():
     if not user:
         return jsonify({"code": 404, "msg": "用户不存在"}), 404
 
-    user.cookie_manual = cookie_str
+    if user.cookie_manual:
+        existing = re.search(r'_uid=(\d+)', CredentialCipher.decrypt(user.cookie_manual) or "")
+        if existing and existing.group(1) != cookie_uid:
+            return jsonify({"code": 400, "msg": "Cookie与已绑定学习通账号不一致"}), 400
+    user.cookie_manual = CredentialCipher.encrypt(cookie_str)
     user.cookie_source = "manual"
     user.cookie_expire_at = datetime.utcnow() + timedelta(days=7)
     db.session.commit()
@@ -104,8 +112,9 @@ def upload_cookie():
 
 
 @auth_bp.route("/cookie/status", methods=["GET"])
+@require_user
 def cookie_status():
-    uid = request.args.get("uid")
+    uid = g.current_user.id
     user = User.query.get(uid)
     if not user:
         return jsonify({"code": 404, "msg": "用户不存在"}), 404
@@ -132,10 +141,11 @@ def cookie_status():
 
 
 @auth_bp.route("/cookie/refresh-auto", methods=["POST"])
+@require_user
 def refresh_cookie_auto():
     """方案1：用保存的密码自动刷新Cookie"""
     data = request.get_json()
-    uid = data.get("uid")
+    uid = g.current_user.id
 
     user = User.query.get(uid)
     if not user:
@@ -156,10 +166,16 @@ def refresh_cookie_auto():
         )
         # 从响应中提取Cookie
         new_cookie = "; ".join([f"{k}={v}" for k, v in resp.cookies.items()])
-        if not new_cookie:
+        new_uid = re.search(r'(?:^|;\s*)_uid=(\d+)', new_cookie)
+        if not new_uid:
             return jsonify({"code": 502, "msg": "学习通登录失败，可能账号密码错误"}), 502
 
-        user.cookie_manual = new_cookie
+        old_cookie = CredentialCipher.decrypt(user.cookie_manual)
+        old_uid = re.search(r'(?:^|;\s*)_uid=(\d+)', old_cookie or "")
+        if old_uid and old_uid.group(1) != new_uid.group(1):
+            return jsonify({"code": 400, "msg": "凭据与已绑定学习通账号不一致"}), 400
+
+        user.cookie_manual = CredentialCipher.encrypt(new_cookie)
         user.cookie_source = "auto"
         user.cookie_expire_at = datetime.utcnow() + timedelta(days=7)
         db.session.commit()
@@ -171,9 +187,10 @@ def refresh_cookie_auto():
 
 
 @auth_bp.route("/user/info", methods=["GET"])
+@require_user
 def user_info():
     """用户信息（含 is_admin 状态）"""
-    uid = request.args.get("uid")
+    uid = g.current_user.id
     user = User.query.get(uid)
     if not user:
         return jsonify({"code": 404, "msg": "用户不存在"}), 404

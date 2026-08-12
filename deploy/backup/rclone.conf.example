@@ -1,0 +1,6 @@
+[remote]
+type = s3
+provider = Other
+access_key_id = replace-me
+secret_access_key = replace-me
+endpoint = https://object-storage.example.com

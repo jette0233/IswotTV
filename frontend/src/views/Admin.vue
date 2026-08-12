@@ -357,16 +357,15 @@ export default {
       var f = this.createForm
       if (!f.course_id) {this.$message.error('请输入课程ID'); return}
       var self = this
-      http.post('/api/course/create', {
-        creator_id: 1, course_id: f.course_id,
+      this.adminPost('/course/create', {
+        course_id: f.course_id,
         course_name: f.course_name || undefined,
         teacher_name: f.teacher_name || undefined,
         address: f.address || undefined,
         weekdays: f.weekdayList.length ? f.weekdayList.join(',') : '1,2,3,4,5',
         default_latitude: f.lat || undefined,
         default_longitude: f.lng || undefined,
-      }, {headers: {'Authorization': 'Bearer ' + this.getToken()}}).then(function(r){
-        var d = r.data
+      }).then(function(d){
         if (d.code===200) {self.$message.success('创建成功'); self.showCreateCourse=false; self.loadCourses()}
         else self.$message.error(d.msg)
       })

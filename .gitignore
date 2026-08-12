@@ -39,6 +39,7 @@ coverage/
 
 # Personal infrastructure notes
 docs/claude-remote-tunnel.md
+deploy/backup/rclone.conf
 
 # Local research/debug artifacts
 backend/captcha_debug/

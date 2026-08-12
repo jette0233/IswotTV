@@ -41,7 +41,8 @@ const handleLogin = async () => {
   try {
     const res = await auth.login(form)
     if (res.data.code === 200) {
-      localStorage.setItem('token', res.data.data.token)
+      localStorage.setItem('token', res.data.data.access_token)
+      localStorage.setItem('refresh_token', res.data.data.refresh_token)
       localStorage.setItem('uid', res.data.data.uid)
       localStorage.setItem('nickname', res.data.data.nickname)
       ElMessage.success('登录成功')

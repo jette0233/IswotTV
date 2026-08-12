@@ -1,0 +1,164 @@
+x-backend: &backend
+  build: ./backend
+  env_file: .env
+  environment:
+    MYSQL_HOST: mysql
+    REDIS_HOST: redis
+  restart: unless-stopped
+  depends_on:
+    mysql: { condition: service_healthy }
+    redis: { condition: service_healthy }
+  stop_grace_period: 30s
+  mem_limit: 768m
+  cpus: 1.0
+  deploy:
+    resources:
+      limits: { memory: 768M, cpus: "1.0" }
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.5
+    stop_grace_period: 10s
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/nginx/proxy_params:/etc/nginx/proxy_params:ro
+      - ${TLS_CERT_PATH:-./deploy/tls/fullchain.pem}:/etc/nginx/tls/fullchain.pem:ro
+      - ${TLS_KEY_PATH:-./deploy/tls/privkey.pem}:/etc/nginx/tls/privkey.pem:ro
+    ports: ["80:80", "443:443"]
+    depends_on: [frontend, api-v1, api-v2-1, api-v2-2]
+    healthcheck: { test: [CMD, wget, -qO-, http://localhost/nginx-health], interval: 15s, timeout: 3s, retries: 4 }
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.5
+    stop_grace_period: 10s
+
+  api-v1:
+    <<: *backend
+    command: [gunicorn, --bind, 0.0.0.0:5000, --workers, "2", --timeout, "30", "app:create_app()"]
+    healthcheck: { test: [CMD, curl, -fsS, http://localhost:5000/api/health], interval: 15s, timeout: 5s, retries: 4 }
+
+  api-v2-1:
+    <<: *backend
+    command: [uvicorn, v2.main:app, --host, 0.0.0.0, --port, "8000"]
+
+  api-v2-2:
+    <<: *backend
+    command: [uvicorn, v2.main:app, --host, 0.0.0.0, --port, "8000"]
+
+  worker-1:
+    <<: *backend
+    command: [python, -m, v2.worker]
+    environment: { MYSQL_HOST: mysql, REDIS_HOST: redis, WORKER_NAME: worker-1, WORKER_METRICS_PORT: "9101" }
+    healthcheck: { test: [CMD-SHELL, "python -c \"import redis; assert redis.Redis(host='redis').get('worker:heartbeat:worker-1')\""], interval: 15s, timeout: 5s, retries: 4 }
+
+  worker-2:
+    <<: *backend
+    command: [python, -m, v2.worker]
+    environment: { MYSQL_HOST: mysql, REDIS_HOST: redis, WORKER_NAME: worker-2, WORKER_METRICS_PORT: "9102" }
+    healthcheck: { test: [CMD-SHELL, "python -c \"import redis; assert redis.Redis(host='redis').get('worker:heartbeat:worker-2')\""], interval: 15s, timeout: 5s, retries: 4 }
+
+  dispatcher:
+    <<: *backend
+    command: [python, -m, v2.dispatcher]
+    environment: { MYSQL_HOST: mysql, REDIS_HOST: redis, DISPATCHER_NAME: dispatcher-1, DISPATCHER_METRICS_PORT: "9103" }
+    healthcheck: { test: [CMD-SHELL, "python -c \"import redis; assert redis.Redis(host='redis').get('dispatcher:heartbeat:dispatcher-1')\""], interval: 15s, timeout: 5s, retries: 4 }
+
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DB}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    command: [--character-set-server=utf8mb4, --collation-server=utf8mb4_unicode_ci]
+    volumes: [mysql-data:/var/lib/mysql]
+    mem_limit: 1g
+    cpus: 1.5
+    stop_grace_period: 60s
+    healthcheck: { test: [CMD-SHELL, "mysqladmin ping -h localhost -p$$MYSQL_ROOT_PASSWORD"], interval: 10s, timeout: 5s, retries: 12 }
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: [redis-server, --appendonly, "yes", --appendfsync, everysec]
+    volumes: [redis-data:/data]
+    mem_limit: 256m
+    cpus: 0.5
+    stop_grace_period: 30s
+    healthcheck: { test: [CMD, redis-cli, ping], interval: 10s, timeout: 3s, retries: 10 }
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    mem_limit: 384m
+    cpus: 0.5
+    stop_grace_period: 30s
+    healthcheck: { test: [CMD, wget, -qO-, http://localhost:9090/-/healthy], interval: 15s, timeout: 5s, retries: 4 }
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    restart: unless-stopped
+    environment: { GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}" }
+    volumes: [grafana-data:/var/lib/grafana]
+    mem_limit: 384m
+    cpus: 0.5
+    stop_grace_period: 30s
+    healthcheck: { test: [CMD-SHELL, "wget -qO- http://localhost:3000/api/health | grep -q ok"], interval: 15s, timeout: 5s, retries: 6 }
+
+  loki:
+    image: grafana/loki:3.3.2
+    restart: unless-stopped
+    command: [-config.file=/etc/loki/local-config.yaml]
+    volumes:
+      - ./deploy/loki/loki.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    mem_limit: 384m
+    cpus: 0.5
+    stop_grace_period: 30s
+    healthcheck: { test: [CMD, wget, -qO-, http://localhost:3100/ready], interval: 15s, timeout: 5s, retries: 6 }
+
+  promtail:
+    image: grafana/promtail:3.3.2
+    restart: unless-stopped
+    command: [-config.file=/etc/promtail/config.yml]
+    volumes:
+      - ./deploy/promtail/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    depends_on: [loki]
+    mem_limit: 128m
+    cpus: 0.25
+    stop_grace_period: 20s
+    healthcheck: { test: [CMD, wget, -qO-, http://localhost:9080/ready], interval: 15s, timeout: 5s, retries: 6 }
+
+  backup:
+    build: ./deploy/backup
+    restart: unless-stopped
+    env_file: .env
+    environment: { MYSQL_HOST: mysql }
+    volumes:
+      - ./deploy/backup/rclone.conf:/root/.config/rclone/rclone.conf:ro
+      - ./backups:/backup
+    depends_on:
+      mysql: { condition: service_healthy }
+    profiles: [backup]
+    mem_limit: 256m
+    cpus: 0.5
+    stop_grace_period: 30s
+    healthcheck: { test: [CMD, test, -f, /tmp/backup-heartbeat], interval: 1h, timeout: 5s, retries: 25, start_period: 24h }
+
+volumes:
+  mysql-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+  loki-data:

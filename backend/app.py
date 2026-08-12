@@ -17,9 +17,10 @@ from app.services.auto_signer import auto_signer
 
 
 def create_app():
+    Config.validate()
     app = Flask(__name__)
     app.config.from_object(Config)
-    CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": "*"}})
+    CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}})
 
     db.init_app(app)
 
@@ -53,30 +54,8 @@ def create_app():
             "auto_signer": auto_signer._enabled,
         }
 
-    # 应用上下文就绪后启动消费者守护线程
+    # Schema changes are managed by Alembic; the web process never mutates schema.
     with app.app_context():
-        db.create_all()
-        # 迁移：添加新字段（如不存在则忽略错误）
-        try:
-            from sqlalchemy import text
-            db.session.execute(text("ALTER TABLE courses ADD COLUMN has_captcha TINYINT(1) DEFAULT 0"))
-            db.session.commit()
-            print("[MIGRATE] 已添加 courses.has_captcha")
-        except Exception:
-            db.session.rollback()
-        # 迁移：给 users 表添加 is_admin 字段（如不存在则忽略）
-        try:
-            db.session.execute(text("ALTER TABLE users ADD COLUMN is_admin TINYINT(1) DEFAULT 0"))
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-        # 迁移：给 courses 表添加 teacher_name 字段
-        try:
-            db.session.execute(text("ALTER TABLE courses ADD COLUMN teacher_name VARCHAR(64)"))
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-        print("[OK] 数据库就绪")
         if mq_manager.redis:
             try:
                 mq_manager.redis.ping()
@@ -86,9 +65,9 @@ def create_app():
         else:
             print("[WARN] Redis 未配置")
 
-        # 启动消费者自动签到守护线程
-        auto_signer.start(app)
-        print("[OK] 消费者自动签到守护已启动")
+        if app.config["START_EMBEDDED_SIGNER"]:
+            auto_signer.start(app)
+            print("[WARN] 已启动兼容模式内嵌Signer；生产环境应使用独立worker")
 
     return app
 
